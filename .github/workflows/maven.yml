@@ -89,3 +89,39 @@ jobs:
             --min-instances 0 \
             --max-instances 1 \
             --quiet
+            
+  deploy-prod:
+    needs: deploy-dev
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Deploy to Cloud Run Production
+        run: |
+          gcloud run deploy simplegreet-prod \
+            --image europe-west1-docker.pkg.dev/project-cbc9d26b-b660-435d-bed/simplegreet/simplegreet:${{ github.sha }} \
+            --region europe-west1 \
+            --port 8080 \
+            --memory 1Gi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 1 \
+            --quiet
+
