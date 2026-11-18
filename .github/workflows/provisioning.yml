@@ -1,0 +1,113 @@
+
+name: Greetings.Provisioning
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_changes:
+        description: "Apply infrastructure changes (false = dry run)"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate YAML
+        run: |
+          ruby -e '
+            require "yaml"
+            ["dev", "prod"].each do |env|
+              file = "infrastructure/simplegreet-#{env}.yaml"
+              data = YAML.load_file(file)
+              abort "Wrong service name" unless data.dig("metadata", "name") == "simplegreet-#{env}"
+              puts "Validated: #{file}"
+            end
+          '
+
+  provision-dev:
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Check image version
+        run: |
+          CURRENT=$(gcloud run services describe simplegreet-dev \
+            --region=europe-west1 \
+            --format="value(spec.template.spec.containers[0].image)")
+          EXPECTED=$(ruby -ryaml -e 'puts YAML.load_file("infrastructure/simplegreet-dev.yaml").dig("spec","template","spec","containers",0,"image")')
+          test "$CURRENT" = "$EXPECTED" || {
+            echo "Image mismatch: refusing rollback"
+            exit 1
+          }
+
+      - name: Provision Dev
+        run: |
+          if [[ "${{ inputs.apply_changes }}" == "true" ]]; then
+            gcloud run services replace \
+              infrastructure/simplegreet-dev.yaml \
+              --region=europe-west1
+          else
+            gcloud run services replace \
+              infrastructure/simplegreet-dev.yaml \
+              --region=europe-west1 \
+              --dry-run
+          fi
+
+  provision-prod:
+    needs: provision-dev
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Check image version
+        run: |
+          CURRENT=$(gcloud run services describe simplegreet-prod \
+            --region=europe-west1 \
+            --format="value(spec.template.spec.containers[0].image)")
+          EXPECTED=$(ruby -ryaml -e 'puts YAML.load_file("infrastructure/simplegreet-prod.yaml").dig("spec","template","spec","containers",0,"image")')
+          test "$CURRENT" = "$EXPECTED" || {
+            echo "Image mismatch: refusing rollback"
+            exit 1
+          }
+
+      - name: Provision Production
+        run: |
+          if [[ "${{ inputs.apply_changes }}" == "true" ]]; then
+            gcloud run services replace \
+              infrastructure/simplegreet-prod.yaml \
+              --region=europe-west1
+          else
+            gcloud run services replace \
+              infrastructure/simplegreet-prod.yaml \
+              --region=europe-west1 \
+              --dry-run
+          fi
