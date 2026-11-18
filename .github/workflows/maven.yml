@@ -1,5 +1,5 @@
 
-name: Java CI
+name: Java CI/CD
 
 on:
   push:
@@ -41,3 +41,51 @@ jobs:
         with:
           name: simplegreet-war
           path: myapp/target/*.war
+
+  deploy-dev:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker authentication
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t europe-west1-docker.pkg.dev/project-cbc9d26b-b660-435d-bed/simplegreet/simplegreet:${{ github.sha }} \
+            ./myapp
+
+      - name: Push Docker image
+        run: |
+          docker push \
+            europe-west1-docker.pkg.dev/project-cbc9d26b-b660-435d-bed/simplegreet/simplegreet:${{ github.sha }}
+
+      - name: Deploy to Cloud Run Dev
+        run: |
+          gcloud run deploy simplegreet-dev \
+            --image europe-west1-docker.pkg.dev/project-cbc9d26b-b660-435d-bed/simplegreet/simplegreet:${{ github.sha }} \
+            --region europe-west1 \
+            --port 8080 \
+            --memory 1Gi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 1 \
+            --quiet
